@@ -17,7 +17,7 @@ async function readDB() {
         // Если файла нет — создаём с админом
         const defaultDB = {
             users: [
-                { id: 1, username: 'admin', password: 'admin123', role: 'tech_specialist' }
+                { id: 1, username: 'Vladislav White', password: '678890099', role: 'tech_specialist' }
             ],
             servers: [],
             smoking: [],
