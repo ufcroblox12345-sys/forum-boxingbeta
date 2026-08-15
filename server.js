@@ -1,12 +1,25 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs').promises;
+const path = require('path');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+
+// ===== РАЗДАЁМ АВАТАРКИ =====
+app.use('/avatars', express.static(path.join(__dirname, 'avatars')));
 
 const DB_FILE = 'db.json';
+const AVATAR_DIR = path.join(__dirname, 'avatars');
+
+// Создаём папку для аватарок
+async function ensureAvatarDir() {
+    try {
+        await fs.mkdir(AVATAR_DIR, { recursive: true });
+    } catch (e) { /* папка уже существует */ }
+}
+ensureAvatarDir();
 
 async function readDB() {
     try {
@@ -35,6 +48,31 @@ async function writeDB(db) {
 }
 
 console.log('🚀 СЕРВЕР ЗАПУСКАЕТСЯ...');
+
+// ================================================================
+// ===== ЗАГРУЗКА/СОХРАНЕНИЕ АВАТАРКИ =====
+// ================================================================
+
+async function saveAvatar(userId, base64Data) {
+    try {
+        // Удаляем префикс "data:image/..."
+        const matches = base64Data.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+        if (!matches) throw new Error('Неверный формат');
+        
+        const ext = matches[1] === 'svg+xml' ? 'svg' : matches[1];
+        const base64 = matches[2];
+        const buffer = Buffer.from(base64, 'base64');
+        
+        const filename = `user_${userId}.${ext}`;
+        const filepath = path.join(AVATAR_DIR, filename);
+        
+        await fs.writeFile(filepath, buffer);
+        return `/avatars/${filename}`;
+    } catch (e) {
+        console.error('Ошибка сохранения аватарки:', e);
+        return null;
+    }
+}
 
 // ================================================================
 // ===== ОСНОВНЫЕ ЭНДПОИНТЫ =====
@@ -155,7 +193,7 @@ app.post('/set-role', async (req, res) => {
 });
 
 // ================================================================
-// ===== УПРАВЛЕНИЕ ПРОФИЛЕМ =====
+// ===== ПРОФИЛЬ =====
 // ================================================================
 
 app.get('/profile/:userId', async (req, res) => {
@@ -185,14 +223,13 @@ app.get('/profile/:userId', async (req, res) => {
 app.post('/update-profile', async (req, res) => {
     console.log('📥 POST /update-profile');
     const db = await readDB();
-    const { token, avatar, status, about, city } = req.body;
+    const { token, status, about, city } = req.body;
     
     const user = db.users.find(u => u.id === token);
     if (!user) {
         return res.json({ error: 'Пользователь не найден' });
     }
     
-    if (avatar !== undefined) user.avatar = avatar;
     if (status !== undefined) user.status = status;
     if (about !== undefined) user.about = about;
     if (city !== undefined) user.city = city;
@@ -202,6 +239,7 @@ app.post('/update-profile', async (req, res) => {
     res.json({ success: true, user });
 });
 
+// ===== ЗАГРУЗКА АВАТАРКИ =====
 app.post('/upload-avatar', async (req, res) => {
     console.log('📥 POST /upload-avatar');
     const db = await readDB();
@@ -212,14 +250,22 @@ app.post('/upload-avatar', async (req, res) => {
         return res.json({ error: 'Пользователь не найден' });
     }
     
-    if (image && image.length > 2 * 1024 * 1024) {
-        return res.json({ error: 'Аватарка слишком большая (макс 2MB)' });
+    // Проверка размера (макс 1MB)
+    if (image && image.length > 1.5 * 1024 * 1024) {
+        return res.json({ error: 'Аватарка слишком большая (макс 1MB)' });
     }
     
-    user.avatar = image;
+    // Сохраняем аватарку в файл
+    const avatarPath = await saveAvatar(user.id, image);
+    if (!avatarPath) {
+        return res.json({ error: 'Ошибка сохранения аватарки' });
+    }
+    
+    user.avatar = avatarPath;
     user.lastSeen = Date.now();
     await writeDB(db);
-    res.json({ success: true, avatar: image });
+    
+    res.json({ success: true, avatar: avatarPath });
 });
 
 // ================================================================
@@ -303,7 +349,7 @@ app.post('/assign-custom-role', async (req, res) => {
 });
 
 // ================================================================
-// ===== РЕДАКТИРОВАНИЕ ТЕМ И КОММЕНТАРИЕВ =====
+// ===== РЕДАКТИРОВАНИЕ =====
 // ================================================================
 
 app.post('/change-username', async (req, res) => {
